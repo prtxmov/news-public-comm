@@ -1,0 +1,20 @@
+services:
+  - type: background
+    name: crypto-mcp-worker
+    env: python
+    plan: standard
+    envVars:
+      - key: CRYPTOPANIC_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: REDIS_URL
+        sync: false
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
