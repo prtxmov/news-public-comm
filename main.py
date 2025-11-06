@@ -42,13 +42,61 @@ else:
         with open(DATA_FILE, "w") as f: json.dump(list(SEEN), f)
     logging.info("Using local file for persistence")
 
-def fetch_news(limit=10):
-    url = "https://cryptopanic.com/api/v1/posts/"
+import time, logging, requests
+
+CRYPTOPANIC_KEY = os.getenv("CRYPTOPANIC_KEY")
+DEFAULT_POLL_SECONDS = int(os.getenv("POLL_SECONDS", "180"))
+
+def fetch_news_with_backoff(limit=10, max_attempts=5):
+    url = "https://cryptopanic.com/api/v1/posts/"  # prefer /api/v1/posts/ if available
     params = {"auth_token": CRYPTOPANIC_KEY, "public": "true", "filter": "news"}
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("results", [])[:limit]
+    attempt = 0
+    backoff = 1.0
+    while attempt < max_attempts:
+        try:
+            r = requests.get(url, params=params, timeout=20)
+            if r.status_code == 429:
+                # honor Retry-After if provided
+                retry_after = r.headers.get("Retry-After")
+                if retry_after:
+                    wait = int(retry_after)
+                    logging.warning("CryptoPanic 429 — Retry-After: %s seconds", wait)
+                else:
+                    wait = min(60, int(backoff))  # cap wait
+                    logging.warning("CryptoPanic 429 — backing off for %s seconds (attempt %d/%d)", wait, attempt+1, max_attempts)
+                time.sleep(wait)
+                attempt += 1
+                backoff *= 2
+                continue
+            r.raise_for_status()
+            data = r.json()
+            results = data.get("results", []) if isinstance(data, dict) else data
+            return results[:limit]
+        except requests.HTTPError as e:
+            code = getattr(e.response, "status_code", None)
+            logging.exception("HTTPError fetching CryptoPanic (status %s)", code)
+            if code == 429:
+                # caught above usually, but fallback
+                time.sleep(min(60, backoff))
+                attempt += 1
+                backoff *= 2
+                continue
+            # for other 5xx errors, backoff too
+            if code and 500 <= code < 600:
+                time.sleep(min(30, backoff))
+                attempt += 1
+                backoff *= 2
+                continue
+            # non-retryable
+            return []
+        except Exception:
+            logging.exception("Error fetching CryptoPanic feed")
+            time.sleep(min(10, backoff))
+            attempt += 1
+            backoff *= 2
+    logging.error("Exceeded attempts fetching CryptoPanic; returning empty list")
+    return []
+
 
 def summarize_news(title, url, excerpt):
     sys = "You are a concise crypto news editor. Output JSON with summary, caption, and image_prompt."
